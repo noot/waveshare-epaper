@@ -1,0 +1,26 @@
+[package]
+edition      = "2024"
+name         = "waveshare-epaper"
+rust-version = "1.88"
+version      = "0.1.0"
+
+[lib]
+name = "waveshare_epaper"
+path = "./src/lib.rs"
+
+[dependencies]
+esp-hal = { version = "~1.1.0", features = ["esp32c3", "unstable"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
+critical-section = "1.2.0"
+embedded-hal = "1.0.0"
+embedded-graphics = "0.8.1"
+esp-println = { version = "0.17.0", default-features = false, features = ["esp32c3", "jtag-serial"] }
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+debug         = 2
+lto           = 'fat'
+opt-level     = 's'
