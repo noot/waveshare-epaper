@@ -19,7 +19,7 @@ use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 
-use waveshare_epaper::il0398::{FB_SIZE, Il0398};
+use waveshare_epaper::ssd1683::{FB_SIZE, Ssd1683};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -60,7 +60,7 @@ fn main() -> ! {
     let fb_ptr: *mut [u8; FB_SIZE] = &raw mut FRAMEBUFFER;
     let fb: &'static mut [u8; FB_SIZE] = unsafe { &mut *fb_ptr };
 
-    let mut display = Il0398::new(spi, cs, dc, rst, busy, delay, fb);
+    let mut display = Ssd1683::new(spi, cs, dc, rst, busy, delay, fb);
 
     println!("waveshare-epaper: starting init");
     match display.init() {
@@ -108,7 +108,7 @@ where
 
     // title
     Text::new("Waveshare 4.2\" ePaper", Point::new(20, 40), ink).draw(d)?;
-    Text::new("400x300 . IL0398 . ESP32-C3", Point::new(20, 65), ink).draw(d)?;
+    Text::new("400x300 . SSD1683 . ESP32-C3", Point::new(20, 65), ink).draw(d)?;
     Text::new("Rust no_std + esp-hal", Point::new(20, 90), ink).draw(d)?;
 
     // divider

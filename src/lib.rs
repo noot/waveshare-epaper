@@ -1,3 +1,3 @@
 #![no_std]
 
-pub mod il0398;
+pub mod ssd1683;
