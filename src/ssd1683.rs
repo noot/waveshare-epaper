@@ -1,6 +1,6 @@
 //! Minimal SSD1683 driver for the Waveshare 4.2" e-Paper V2 Rev 2.2 (GDEY042T81).
 //!
-//! Command sequence ported from GxEPD2_420_GDEY042T81 by Jean-Marc Zingg.
+//! Command sequence follows the Waveshare EPD_4in2_V2 reference implementation.
 //! This is NOT the older IL0398 — Rev 2.2 uses SSD1683 with SSD1681-style commands.
 
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -18,7 +18,6 @@ pub const FB_SIZE: usize = ROW_BYTES * HEIGHT as usize; // 15000
 
 // SSD1683 commands
 const CMD_SW_RESET: u8 = 0x12;
-const CMD_DRIVER_OUTPUT: u8 = 0x01; // set MUX
 const CMD_DATA_ENTRY_MODE: u8 = 0x11;
 const CMD_SET_RAM_X_ADDR: u8 = 0x44;
 const CMD_SET_RAM_Y_ADDR: u8 = 0x45;
@@ -27,7 +26,6 @@ const CMD_SET_RAM_Y_COUNT: u8 = 0x4F;
 const CMD_WRITE_RAM_BW: u8 = 0x24; // current (new) B/W data
 const CMD_WRITE_RAM_RED: u8 = 0x26; // previous (old) data for partial
 const CMD_BORDER_WAVEFORM: u8 = 0x3C;
-const CMD_TEMP_SENSOR: u8 = 0x18; // read built-in temp sensor
 const CMD_WRITE_TEMP: u8 = 0x1A;
 const CMD_DISPLAY_UPDATE_CTRL: u8 = 0x21;
 const CMD_DISPLAY_UPDATE_SEQ: u8 = 0x22;
@@ -104,7 +102,7 @@ where
         self.data(d)
     }
 
-    // SSD1683 busy: LOW = busy, HIGH = idle (active low)
+    // BUSY: LOW = busy, HIGH = idle (active low, confirmed by logic trace)
     fn wait_busy(&mut self, label: &str, timeout_ms: u32) {
         self.delay.delay_ms(10);
         let mut elapsed = 10u32;
@@ -141,7 +139,10 @@ where
         // data entry mode: x increase, y increase (normal)
         self.cmd_with(CMD_DATA_ENTRY_MODE, &[0x03])?;
         // x address range (in bytes)
-        self.cmd_with(CMD_SET_RAM_X_ADDR, &[(x / 8) as u8, ((x + w - 1) / 8) as u8])?;
+        self.cmd_with(
+            CMD_SET_RAM_X_ADDR,
+            &[(x / 8) as u8, ((x + w - 1) / 8) as u8],
+        )?;
         // y address range
         self.cmd_with(
             CMD_SET_RAM_Y_ADDR,
@@ -154,27 +155,21 @@ where
         )?;
         // set counters to start position
         self.cmd_with(CMD_SET_RAM_X_COUNT, &[(x / 8) as u8])?;
-        self.cmd_with(
-            CMD_SET_RAM_Y_COUNT,
-            &[(y % 256) as u8, (y / 256) as u8],
-        )?;
+        self.cmd_with(CMD_SET_RAM_Y_COUNT, &[(y % 256) as u8, (y / 256) as u8])?;
         Ok(())
     }
 
-    /// Initialize the display (SSD1683 / GDEY042T81 sequence)
+    /// Initialize the display — matches Waveshare EPD_4IN2_V2_Init
     fn init_display(&mut self) -> Result<(), Error<SPI::Error, CS::Error>> {
-        self.delay.delay_ms(10);
-        // software reset
         self.cmd(CMD_SW_RESET)?;
-        self.delay.delay_ms(10);
-        // set MUX as 300 (HEIGHT - 1 = 299 = 0x012B)
-        self.cmd_with(CMD_DRIVER_OUTPUT, &[0x2B, 0x01, 0x00])?;
+        self.wait_busy("sw_reset", 5000);
+        // display update control: bypass RED channel
+        self.cmd_with(CMD_DISPLAY_UPDATE_CTRL, &[0x40, 0x00])?;
         // border waveform
-        self.cmd_with(CMD_BORDER_WAVEFORM, &[0x01])?;
-        // use built-in temperature sensor
-        self.cmd_with(CMD_TEMP_SENSOR, &[0x80])?;
-        // set full RAM area
+        self.cmd_with(CMD_BORDER_WAVEFORM, &[0x05])?;
+        // data entry mode + RAM window + cursor
         self.set_ram_area(0, 0, WIDTH as u16, HEIGHT as u16)?;
+        self.wait_busy("init", 5000);
         self.initialized = true;
         Ok(())
     }
@@ -267,13 +262,9 @@ where
         if !self.initialized {
             self.init_display()?;
         }
-        self.write_framebuffer_full()?;
+        self.write_framebuffer_current()?;
 
-        // display update control: bypass RED channel
-        self.cmd_with(CMD_DISPLAY_UPDATE_CTRL, &[0x40, 0x00])?;
-        // display update sequence: full refresh with built-in waveform
         self.cmd_with(CMD_DISPLAY_UPDATE_SEQ, &[0xf7])?;
-        // master activate
         self.cmd(CMD_MASTER_ACTIVATE)?;
         self.wait_busy("refresh", 30000);
         println!("ssd1683: full flush done");
@@ -310,6 +301,8 @@ where
         // write current data only (previous stays in RAM from last write)
         self.write_framebuffer_current()?;
 
+        // border waveform: follow LUT to avoid border flicker during partial
+        self.cmd_with(CMD_BORDER_WAVEFORM, &[0x80])?;
         // display update control: RED normal (needed for differential update)
         self.cmd_with(CMD_DISPLAY_UPDATE_CTRL, &[0x00, 0x00])?;
         // partial update sequence

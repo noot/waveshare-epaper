@@ -47,12 +47,14 @@ fn main() -> ! {
     .with_sck(peripherals.GPIO1)
     .with_mosi(peripherals.GPIO0);
 
-    // control pins: GPIO2=CS, GPIO3=DC, GPIO4=RST, GPIO5=BUSY
+    // control pins: GPIO2=CS, GPIO5=DC, GPIO4=RST, GPIO10=BUSY
+    // NOTE: GPIO4-7 are JTAG pins with internal pull-ups on ESP32-C3,
+    // so BUSY (input) must not use them — the pull-up fights the signal.
     let cs = Output::new(peripherals.GPIO2, Level::High, OutputConfig::default());
-    let dc = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+    let dc = Output::new(peripherals.GPIO5, Level::Low, OutputConfig::default());
     let rst = Output::new(peripherals.GPIO4, Level::High, OutputConfig::default());
     let busy = Input::new(
-        peripherals.GPIO5,
+        peripherals.GPIO10,
         InputConfig::default().with_pull(Pull::None),
     );
     let delay = Delay::new();

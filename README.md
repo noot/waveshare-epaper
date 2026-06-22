@@ -13,9 +13,9 @@ ESP32-C3 SuperMini → Waveshare 4.2" module:
 | 0    | DIN (MOSI) |
 | 1    | CLK (SCK) |
 | 2    | CS |
-| 3    | DC |
+| 5    | DC |
 | 4    | RST |
-| 5    | BUSY |
+| 10   | BUSY |
 | 3V3  | VCC |
 | GND  | GND |
 
@@ -72,6 +72,7 @@ Implements `DrawTarget<Color = BinaryColor>` from [embedded-graphics](https://do
 ## Hardware Notes
 
 - **Rev 2.2** uses the SSD1683 controller (GDEY042T81 panel), not the older IL0398. Older init sequences will not work.
-- Busy pin is **active HIGH** (HIGH = busy, LOW = idle).
+- Busy pin is **active LOW** (LOW = busy, HIGH = idle).
 - SSD1683 has dual RAM buffers (current + previous) enabling differential partial refresh.
 - No custom LUTs needed — uses built-in OTP waveforms.
+- On ESP32-C3, **avoid GPIO4–7 for input pins** — they are JTAG pins with internal pull-ups enabled by default that can interfere with signal reading.
