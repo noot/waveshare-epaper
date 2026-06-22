@@ -104,12 +104,12 @@ where
         self.data(d)
     }
 
-    // SSD1683 busy: HIGH = busy, LOW = idle (opposite of UC8179!)
+    // SSD1683 busy: LOW = busy, HIGH = idle (active low)
     fn wait_busy(&mut self, label: &str, timeout_ms: u32) {
         self.delay.delay_ms(10);
         let mut elapsed = 10u32;
 
-        while self.busy.is_high().unwrap_or(true) {
+        while self.busy.is_low().unwrap_or(true) {
             self.delay.delay_ms(10);
             elapsed += 10;
             if elapsed >= timeout_ms {
