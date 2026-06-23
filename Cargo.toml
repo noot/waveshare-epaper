@@ -16,6 +16,24 @@ embedded-hal = "1.0.0"
 embedded-graphics = "0.8.1"
 esp-println = { version = "0.17.0", default-features = false, features = ["esp32c3", "jtag-serial"] }
 
+esp-radio    = { version = "1.0.0-beta.0", features = ["esp32c3", "wifi", "log-04"], optional = true }
+esp-rtos     = { version = "0.3.0", features = ["esp32c3", "esp-radio", "embassy", "log-04"], optional = true }
+esp-alloc    = { version = "0.10.0", optional = true }
+embassy-executor = { version = "0.10.0", optional = true }
+embassy-net  = { version = "0.9.0", features = ["dhcpv4", "medium-ethernet", "tcp", "dns"], optional = true }
+embassy-time = { version = "0.5.0", optional = true }
+reqwless     = { version = "0.14.0", default-features = false, optional = true }
+static_cell  = { version = "2.1.0", optional = true }
+log              = { version = "0.4", optional = true }
+embedded-io-async = { version = "0.7", optional = true }
+
+[features]
+wifi = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-alloc", "dep:embassy-executor", "dep:embassy-net", "dep:embassy-time", "dep:reqwless", "dep:static_cell", "dep:log", "dep:embedded-io-async"]
+
+[[example]]
+name = "fetch"
+required-features = ["wifi"]
+
 [profile.dev]
 opt-level = "s"
 

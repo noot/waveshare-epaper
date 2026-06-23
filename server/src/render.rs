@@ -24,12 +24,18 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
         draw_album_art(&mut img, art_bytes);
     }
 
+    // dither the image first (album art gets proper gradients)
+    let mut pixels = dither(&img);
+
+    // draw text and UI on top as pure black — stays crisp
     let track_scale = PxScale::from(24.0);
     let detail_scale = PxScale::from(18.0);
     let small_scale = PxScale::from(14.0);
 
+    let mut overlay = GrayImage::from_pixel(WIDTH, HEIGHT, Luma([255u8]));
+
     draw_text_mut(
-        &mut img,
+        &mut overlay,
         Luma([0u8]),
         TEXT_X,
         ART_Y as i32 + 10,
@@ -39,8 +45,8 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
     );
 
     draw_text_mut(
-        &mut img,
-        Luma([60u8]),
+        &mut overlay,
+        Luma([0u8]),
         TEXT_X,
         ART_Y as i32 + 45,
         detail_scale,
@@ -49,8 +55,8 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
     );
 
     draw_text_mut(
-        &mut img,
-        Luma([80u8]),
+        &mut overlay,
+        Luma([0u8]),
         TEXT_X,
         ART_Y as i32 + 72,
         detail_scale,
@@ -65,19 +71,30 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
             format_time(duration)
         };
         draw_text_mut(
-            &mut img,
+            &mut overlay,
             Luma([0u8]),
             TEXT_X,
-            ART_Y as i32 + 110,
+            ART_Y as i32 + 105,
             small_scale,
             &font,
             &time_str,
         );
 
-        draw_progress_bar(&mut img, np.progress_secs, duration);
+        draw_progress_bar(&mut overlay, np.progress_secs, duration);
     }
 
-    dither_and_pack(&img)
+    // stamp the art border on the overlay too
+    draw_art_border(&mut overlay);
+
+    // merge: overlay pixels below threshold become black in the output.
+    // higher threshold = bolder text (includes more anti-aliased edge pixels)
+    for (i, px) in overlay.pixels().enumerate() {
+        if px.0[0] < 200 {
+            pixels[i] = 0.0;
+        }
+    }
+
+    pack(&pixels)
 }
 
 pub fn render_idle() -> Vec<u8> {
@@ -86,15 +103,21 @@ pub fn render_idle() -> Vec<u8> {
 
     draw_text_mut(
         &mut img,
-        Luma([80u8]),
-        130,
+        Luma([0u8]),
+        110,
         135,
-        PxScale::from(22.0),
+        PxScale::from(24.0),
         &font,
         "nothing playing",
     );
 
-    dither_and_pack(&img)
+    let mut pixels = dither(&img);
+    for (i, px) in img.pixels().enumerate() {
+        if px.0[0] < 128 {
+            pixels[i] = 0.0;
+        }
+    }
+    pack(&pixels)
 }
 
 fn draw_album_art(img: &mut GrayImage, art_bytes: &[u8]) {
@@ -110,8 +133,9 @@ fn draw_album_art(img: &mut GrayImage, art_bytes: &[u8]) {
             img.put_pixel(ART_X + x, ART_Y + y, *px);
         }
     }
+}
 
-    // 1px border around album art
+fn draw_art_border(img: &mut GrayImage) {
     for x in ART_X..ART_X + ART_SIZE {
         img.put_pixel(x, ART_Y, Luma([0u8]));
         img.put_pixel(x, ART_Y + ART_SIZE - 1, Luma([0u8]));
@@ -166,9 +190,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Floyd-Steinberg dither to 1-bit, then pack into 1bpp framebuffer.
-/// 1 = white, 0 = black (matching SSD1683 convention).
-fn dither_and_pack(img: &GrayImage) -> Vec<u8> {
+fn dither(img: &GrayImage) -> Vec<f32> {
     let (w, h) = img.dimensions();
     let mut pixels: Vec<f32> = img.pixels().map(|p| p.0[0] as f32).collect();
 
@@ -195,16 +217,19 @@ fn dither_and_pack(img: &GrayImage) -> Vec<u8> {
         }
     }
 
-    let row_bytes = w as usize / 8;
+    pixels
+}
+
+fn pack(pixels: &[f32]) -> Vec<u8> {
+    let row_bytes = WIDTH as usize / 8;
     let mut fb = vec![0xFFu8; FB_SIZE];
-    for y in 0..h as usize {
-        for x in 0..w as usize {
-            let idx = y * w as usize + x;
+    for y in 0..HEIGHT as usize {
+        for x in 0..WIDTH as usize {
+            let idx = y * WIDTH as usize + x;
             if pixels[idx] < 128.0 {
                 fb[y * row_bytes + x / 8] &= !(0x80u8 >> (x % 8));
             }
         }
     }
-
     fb
 }

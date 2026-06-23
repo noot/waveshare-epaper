@@ -8,6 +8,10 @@ demo:
 server:
     cd server && cargo run
 
+# fetch and display now-playing over wifi
+fetch:
+    SSID="$SSID" PASSWORD="$PASSWORD" SERVER_URL="$SERVER_URL" cargo run --release --example fetch --features wifi
+
 # check firmware compiles
 check:
     cargo c --example demo
