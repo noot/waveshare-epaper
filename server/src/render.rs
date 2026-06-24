@@ -86,6 +86,9 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
     // stamp the art border on the overlay too
     draw_art_border(&mut overlay);
 
+    // transport controls: ⏮  ⏸/▶  ⏭ centered below progress bar
+    draw_transport_icons(&mut overlay, np.is_playing);
+
     // merge: overlay pixels below threshold become black in the output.
     // higher threshold = bolder text (includes more anti-aliased edge pixels)
     for (i, px) in overlay.pixels().enumerate() {
@@ -150,7 +153,7 @@ fn draw_progress_bar(img: &mut GrayImage, progress: Option<u32>, duration: u32) 
     let bar_x = 20u32;
     let bar_y = 220u32;
     let bar_w = 360u32;
-    let bar_h = 6u32;
+    let bar_h = 12u32;
 
     // border
     for x in bar_x..bar_x + bar_w {
@@ -173,6 +176,81 @@ fn draw_progress_bar(img: &mut GrayImage, progress: Option<u32>, duration: u32) 
             for x in (bar_x + 1)..=(bar_x + fill_w) {
                 img.put_pixel(x, y, Luma([0u8]));
             }
+        }
+    }
+}
+
+fn draw_transport_icons(img: &mut GrayImage, is_playing: bool) {
+    let cy = 255u32;
+    let cx = WIDTH / 2;
+    let size = 8u32;
+    let spacing = 50u32;
+
+    // prev: left triangle + bar
+    draw_prev_icon(img, cx - spacing, cy, size);
+
+    // play/pause in center
+    if is_playing {
+        draw_pause_icon(img, cx, cy, size);
+    } else {
+        draw_play_icon(img, cx, cy, size);
+    }
+
+    // next: bar + right triangle
+    draw_next_icon(img, cx + spacing, cy, size);
+}
+
+fn draw_play_icon(img: &mut GrayImage, cx: u32, cy: u32, size: u32) {
+    for row in 0..=(size * 2) {
+        let y = cy - size + row;
+        let half = if row <= size { row } else { size * 2 - row };
+        for dx in 0..half {
+            img.put_pixel(cx - size / 2 + dx, y, Luma([0u8]));
+        }
+    }
+}
+
+fn draw_pause_icon(img: &mut GrayImage, cx: u32, cy: u32, size: u32) {
+    let bar_w = 3u32;
+    let gap = 4u32;
+    for y in (cy - size)..=(cy + size) {
+        for dx in 0..bar_w {
+            img.put_pixel(cx - gap / 2 - bar_w + dx, y, Luma([0u8]));
+            img.put_pixel(cx + gap / 2 + dx, y, Luma([0u8]));
+        }
+    }
+}
+
+fn draw_prev_icon(img: &mut GrayImage, cx: u32, cy: u32, size: u32) {
+    // bar on the left
+    for y in (cy - size)..=(cy + size) {
+        for dx in 0..2u32 {
+            img.put_pixel(cx - size / 2 - 2 + dx, y, Luma([0u8]));
+        }
+    }
+    // left-pointing triangle
+    for row in 0..=(size * 2) {
+        let y = cy - size + row;
+        let half = if row <= size { row } else { size * 2 - row };
+        for dx in 0..half {
+            img.put_pixel(cx + size / 2 - dx, y, Luma([0u8]));
+        }
+    }
+}
+
+fn draw_next_icon(img: &mut GrayImage, cx: u32, cy: u32, size: u32) {
+    // right-pointing triangle
+    for row in 0..=(size * 2) {
+        let y = cy - size + row;
+        let half = if row <= size { row } else { size * 2 - row };
+        for dx in 0..half {
+            img.put_pixel(cx - size / 2 + dx, y, Luma([0u8]));
+        }
+    }
+    // bar on the right
+    for y in (cy - size)..=(cy + size) {
+        for dx in 0..2u32 {
+            img.put_pixel(cx + size / 2 + 1 + dx, y, Luma([0u8]));
         }
     }
 }

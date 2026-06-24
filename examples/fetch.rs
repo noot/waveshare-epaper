@@ -3,11 +3,13 @@
 
 extern crate alloc;
 
+use alloc::format;
+
 use embassy_executor::Spawner;
 use embassy_net::dns::DnsSocket;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::{Runner, StackResources};
-use embassy_time::Timer;
+use embassy_time::{Instant, Timer};
 use embedded_io_async::Read as _;
 use esp_alloc as _;
 use esp_hal::clock::CpuClock;
@@ -39,8 +41,8 @@ const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const SERVER_URL: &str = env!("SERVER_URL");
 
-const POLL_INTERVAL_SECS: u64 = 10;
-const FULL_REFRESH_EVERY: u32 = 30;
+const POLL_INTERVAL_SECS: u64 = 5;
+const FULL_REFRESH_EVERY: u32 = 60;
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -84,6 +86,12 @@ async fn main(spawner: Spawner) -> ! {
         InputConfig::default().with_pull(Pull::None),
     );
     let delay = Delay::new();
+
+    // GPIO6 = touch sensor (AT42QT1010, HIGH on touch)
+    let touch = Input::new(
+        peripherals.GPIO6,
+        InputConfig::default().with_pull(Pull::None),
+    );
 
     let fb_ptr: *mut [u8; FB_SIZE] = &raw mut FRAMEBUFFER;
     let fb: &'static mut [u8; FB_SIZE] = unsafe { &mut *fb_ptr };
@@ -144,6 +152,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut rx_buf = [0u8; 4096];
     let mut cycle: u32 = 0;
 
+    let base = server_base(SERVER_URL);
+    let play_pause_url = format!("{}/play-pause", base);
+    let next_url = format!("{}/next", base);
+
     loop {
         let fb_mut = display.framebuffer_mut();
 
@@ -167,7 +179,78 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         cycle += 1;
-        Timer::after(embassy_time::Duration::from_secs(POLL_INTERVAL_SECS)).await;
+
+        // poll touch during wait period
+        let wait_end = Instant::now() + embassy_time::Duration::from_secs(POLL_INTERVAL_SECS);
+        while Instant::now() < wait_end {
+            if let Some(gesture) = detect_gesture(&touch).await {
+                let url = match gesture {
+                    Gesture::SingleTap => {
+                        println!("touch: single tap → play/pause");
+                        &play_pause_url
+                    }
+                    Gesture::DoubleTap => {
+                        println!("touch: double tap → next");
+                        &next_url
+                    }
+                };
+                send_command(&mut client, &mut rx_buf, url).await;
+                Timer::after(embassy_time::Duration::from_millis(500)).await;
+                break;
+            }
+            Timer::after(embassy_time::Duration::from_millis(20)).await;
+        }
+    }
+}
+
+fn server_base(url: &str) -> &str {
+    match url.rfind('/') {
+        Some(pos) => &url[..pos],
+        None => url,
+    }
+}
+
+enum Gesture {
+    SingleTap,
+    DoubleTap,
+}
+
+async fn detect_gesture(pin: &Input<'_>) -> Option<Gesture> {
+    if pin.is_low() {
+        return None;
+    }
+
+    // touched — wait for release
+    while pin.is_high() {
+        Timer::after(embassy_time::Duration::from_millis(20)).await;
+    }
+
+    // 300ms window for a second tap
+    let deadline = Instant::now() + embassy_time::Duration::from_millis(300);
+    while Instant::now() < deadline {
+        if pin.is_high() {
+            while pin.is_high() {
+                Timer::after(embassy_time::Duration::from_millis(20)).await;
+            }
+            return Some(Gesture::DoubleTap);
+        }
+        Timer::after(embassy_time::Duration::from_millis(20)).await;
+    }
+
+    Some(Gesture::SingleTap)
+}
+
+async fn send_command<'a>(
+    client: &mut HttpClient<'a, TcpClient<'a, 1, 1500, 1500>, DnsSocket<'a>>,
+    rx_buf: &mut [u8],
+    url: &str,
+) {
+    match client.request(Method::POST, url).await {
+        Ok(mut builder) => match builder.send(rx_buf).await {
+            Ok(resp) => println!("command: {} → {}", url, resp.status.0),
+            Err(_) => println!("command: send failed"),
+        },
+        Err(_) => println!("command: request failed"),
     }
 }
 

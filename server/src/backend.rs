@@ -12,6 +12,7 @@ pub struct NowPlaying {
     pub cover_art: Option<Vec<u8>>,
     pub progress_secs: Option<u32>,
     pub duration_secs: Option<u32>,
+    pub is_playing: bool,
 }
 
 pub struct NavidromeConfig {
@@ -58,6 +59,20 @@ impl Backend {
         match self {
             Self::Navidrome(cfg) => cfg.now_playing().await,
             Self::Spotify(cfg) => cfg.now_playing().await,
+        }
+    }
+
+    pub async fn play_pause(&self) -> eyre::Result<()> {
+        match self {
+            Self::Navidrome(_) => Ok(()),
+            Self::Spotify(cfg) => cfg.play_pause().await,
+        }
+    }
+
+    pub async fn next_track(&self) -> eyre::Result<()> {
+        match self {
+            Self::Navidrome(_) => Ok(()),
+            Self::Spotify(cfg) => cfg.next_track().await,
         }
     }
 }
@@ -147,6 +162,7 @@ impl NavidromeConfig {
             cover_art,
             progress_secs: None,
             duration_secs: entry.duration,
+            is_playing: true,
         }))
     }
 
@@ -289,19 +305,102 @@ impl SpotifyConfig {
         self.parse_response(body).await
     }
 
+    async fn spotify_request(&self, method: reqwest::Method, url: &str) -> eyre::Result<()> {
+        let token = self.get_token().await?;
+        let mut resp = self
+            .client
+            .request(method.clone(), url)
+            .bearer_auth(&token)
+            .header(reqwest::header::CONTENT_LENGTH, 0)
+            .send()
+            .await
+            .wrap_err("failed to reach spotify")?;
+
+        debug!("spotify {} {} → {}", method, url, resp.status());
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let token = self.refresh_access_token().await?;
+            resp = self
+                .client
+                .request(method.clone(), url)
+                .bearer_auth(&token)
+                .header(reqwest::header::CONTENT_LENGTH, 0)
+                .send()
+                .await
+                .wrap_err("failed to reach spotify after token refresh")?;
+            debug!("spotify {} {} (retry) → {}", method, url, resp.status());
+        }
+
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::NO_CONTENT {
+            let body = resp.text().await.unwrap_or_default();
+            eyre::bail!("spotify {} {} returned {}: {}", method, url, status, body);
+        }
+
+        Ok(())
+    }
+
+    async fn play_pause(&self) -> eyre::Result<()> {
+        let token = self.get_token().await?;
+        let resp = self
+            .client
+            .get("https://api.spotify.com/v1/me/player")
+            .bearer_auth(&token)
+            .send()
+            .await
+            .wrap_err("failed to get playback state")?;
+
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return self
+                .spotify_request(
+                    reqwest::Method::PUT,
+                    "https://api.spotify.com/v1/me/player/play",
+                )
+                .await;
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .wrap_err("failed to parse playback state")?;
+
+        let is_playing = body
+            .get("is_playing")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if is_playing {
+            self.spotify_request(
+                reqwest::Method::PUT,
+                "https://api.spotify.com/v1/me/player/pause",
+            )
+            .await
+        } else {
+            self.spotify_request(
+                reqwest::Method::PUT,
+                "https://api.spotify.com/v1/me/player/play",
+            )
+            .await
+        }
+    }
+
+    async fn next_track(&self) -> eyre::Result<()> {
+        self.spotify_request(
+            reqwest::Method::POST,
+            "https://api.spotify.com/v1/me/player/next",
+        )
+        .await
+    }
+
     async fn parse_response(
         &self,
         body: SpotifyCurrentlyPlaying,
     ) -> eyre::Result<Option<NowPlaying>> {
-        if !body.is_playing {
-            return Ok(None);
-        }
-
         let Some(item) = body.item else {
             return Ok(None);
         };
 
-        debug!(track = %item.name, "spotify: now playing");
+        debug!(track = %item.name, playing = body.is_playing, "spotify: track");
 
         let cover_art = if let Some(img) = item.album.images.first() {
             match self.client.get(&img.url).send().await {
@@ -326,6 +425,7 @@ impl SpotifyConfig {
             cover_art,
             progress_secs: body.progress_ms.map(|ms| (ms / 1000) as u32),
             duration_secs: Some((item.duration_ms / 1000) as u32),
+            is_playing: body.is_playing,
         }))
     }
 }

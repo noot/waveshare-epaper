@@ -4,7 +4,7 @@ mod render;
 use axum::Router;
 use axum::http::header;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use backend::Backend;
 use eyre::WrapErr as _;
 use std::sync::Arc;
@@ -47,6 +47,8 @@ async fn main() -> eyre::Result<()> {
     let state = Arc::new(State { backends });
     let app = Router::new()
         .route("/framebuffer", get(framebuffer_handler))
+        .route("/play-pause", post(play_pause_handler))
+        .route("/next", post(next_handler))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
@@ -85,4 +87,26 @@ async fn framebuffer_handler(
     info!("nothing playing");
     let fb = render::render_idle();
     ([(header::CONTENT_TYPE, "application/octet-stream")], fb)
+}
+
+async fn play_pause_handler(
+    axum::extract::State(state): axum::extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    for backend in &state.backends {
+        if let Err(e) = backend.play_pause().await {
+            tracing::warn!(error = %e, "play_pause failed");
+        }
+    }
+    "ok"
+}
+
+async fn next_handler(
+    axum::extract::State(state): axum::extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    for backend in &state.backends {
+        if let Err(e) = backend.next_track().await {
+            tracing::warn!(error = %e, "next_track failed");
+        }
+    }
+    "ok"
 }
