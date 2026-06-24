@@ -1,0 +1,16 @@
+[Unit]
+Description=waveshare e-paper music server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=e
+WorkingDirectory=/home/e/waveshare-epaper/server
+EnvironmentFile=/home/e/waveshare-epaper/server/.env
+ExecStart=/home/e/.cargo/bin/cargo run --release
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

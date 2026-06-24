@@ -1,4 +1,5 @@
 use ab_glyph::{FontRef, PxScale};
+use chrono::Local;
 use image::{GrayImage, Luma, imageops};
 use imageproc::drawing::draw_text_mut;
 
@@ -15,6 +16,7 @@ const ART_Y: u32 = 40;
 const TEXT_X: i32 = 185;
 
 static FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
+static IDLE_IMG_BYTES: &[u8] = include_bytes!("../assets/idle.jpg");
 
 pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
     let mut img = GrayImage::from_pixel(WIDTH, HEIGHT, Luma([255u8]));
@@ -102,24 +104,52 @@ pub fn render_now_playing(np: &NowPlaying) -> Vec<u8> {
 
 pub fn render_idle() -> Vec<u8> {
     let mut img = GrayImage::from_pixel(WIDTH, HEIGHT, Luma([255u8]));
-    let font = FontRef::try_from_slice(FONT_BYTES).expect("bundled font is valid");
 
-    draw_text_mut(
-        &mut img,
-        Luma([0u8]),
-        110,
-        135,
-        PxScale::from(24.0),
-        &font,
-        "nothing playing",
-    );
+    if let Ok(bg) = image::load_from_memory(IDLE_IMG_BYTES) {
+        let bg = bg.resize_to_fill(WIDTH, HEIGHT, imageops::FilterType::Lanczos3);
+        let bg_gray = bg.to_luma8();
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                img.put_pixel(x, y, *bg_gray.get_pixel(x, y));
+            }
+        }
+    }
 
     let mut pixels = dither(&img);
-    for (i, px) in img.pixels().enumerate() {
-        if px.0[0] < 128 {
+
+    let font = FontRef::try_from_slice(FONT_BYTES).expect("bundled font is valid");
+    let now = Local::now();
+    let time_str = now.format("%H:%M").to_string();
+    let date_str = now.format("%A, %B %-d").to_string();
+
+    let mut overlay = GrayImage::from_pixel(WIDTH, HEIGHT, Luma([255u8]));
+
+    draw_text_mut(
+        &mut overlay,
+        Luma([0u8]),
+        60,
+        15,
+        PxScale::from(48.0),
+        &font,
+        &time_str,
+    );
+
+    draw_text_mut(
+        &mut overlay,
+        Luma([0u8]),
+        60,
+        68,
+        PxScale::from(20.0),
+        &font,
+        &date_str,
+    );
+
+    for (i, px) in overlay.pixels().enumerate() {
+        if px.0[0] < 200 {
             pixels[i] = 0.0;
         }
     }
+
     pack(&pixels)
 }
 
@@ -165,16 +195,23 @@ fn draw_progress_bar(img: &mut GrayImage, progress: Option<u32>, duration: u32) 
         img.put_pixel(bar_x + bar_w - 1, y, Luma([0u8]));
     }
 
-    // fill
-    if let Some(progress) = progress {
-        let fill_w = if duration > 0 {
+    // fill: explicitly write both black (progress) and white (remaining)
+    // so partial refresh cleanly transitions old pixels
+    let fill_w = if let Some(progress) = progress {
+        if duration > 0 {
             ((progress as u64 * (bar_w - 2) as u64) / duration as u64) as u32
         } else {
             0
-        };
-        for y in (bar_y + 1)..=(bar_y + bar_h - 1) {
-            for x in (bar_x + 1)..=(bar_x + fill_w) {
+        }
+    } else {
+        0
+    };
+    for y in (bar_y + 1)..=(bar_y + bar_h - 1) {
+        for x in (bar_x + 1)..=(bar_x + bar_w - 2) {
+            if x <= bar_x + fill_w {
                 img.put_pixel(x, y, Luma([0u8]));
+            } else {
+                img.put_pixel(x, y, Luma([255u8]));
             }
         }
     }
