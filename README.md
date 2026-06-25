@@ -6,6 +6,11 @@ Rust no_std driver for the **Waveshare 4.2" e-Paper Module V2 Rev 2.2** (GDEY042
 
 Also includes a **music now-playing server** with Spotify and Navidrome backends, and a WiFi fetch example that displays the rendered framebuffer on the e-paper with touch controls.
 
+<p>
+  <img src="pictures/now-playing.jpg" width="400" alt="Now playing screen">
+  <img src="pictures/idle-screen.jpg" width="400" alt="Idle screen with clock">
+</p>
+
 ## Wiring
 
 ESP32-C3 SuperMini → Waveshare 4.2" module:

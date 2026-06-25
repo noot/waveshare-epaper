@@ -195,23 +195,16 @@ fn draw_progress_bar(img: &mut GrayImage, progress: Option<u32>, duration: u32) 
         img.put_pixel(bar_x + bar_w - 1, y, Luma([0u8]));
     }
 
-    // fill: explicitly write both black (progress) and white (remaining)
-    // so partial refresh cleanly transitions old pixels
-    let fill_w = if let Some(progress) = progress {
-        if duration > 0 {
+    // fill
+    if let Some(progress) = progress {
+        let fill_w = if duration > 0 {
             ((progress as u64 * (bar_w - 2) as u64) / duration as u64) as u32
         } else {
             0
-        }
-    } else {
-        0
-    };
-    for y in (bar_y + 1)..=(bar_y + bar_h - 1) {
-        for x in (bar_x + 1)..=(bar_x + bar_w - 2) {
-            if x <= bar_x + fill_w {
+        };
+        for y in (bar_y + 1)..=(bar_y + bar_h - 1) {
+            for x in (bar_x + 1)..=(bar_x + fill_w) {
                 img.put_pixel(x, y, Luma([0u8]));
-            } else {
-                img.put_pixel(x, y, Luma([255u8]));
             }
         }
     }

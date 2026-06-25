@@ -142,8 +142,8 @@ async fn main(spawner: Spawner) -> ! {
     let tcp_client = TcpClient::new(
         stack,
         mk_static!(
-            TcpClientState<1, 1500, 1500>,
-            TcpClientState::<1, 1500, 1500>::new()
+            TcpClientState<2, 1500, 1500>,
+            TcpClientState::<2, 1500, 1500>::new()
         ),
     );
     let dns_client = DnsSocket::new(stack);
@@ -241,7 +241,7 @@ async fn detect_gesture(pin: &Input<'_>) -> Option<Gesture> {
 }
 
 async fn send_command<'a>(
-    client: &mut HttpClient<'a, TcpClient<'a, 1, 1500, 1500>, DnsSocket<'a>>,
+    client: &mut HttpClient<'a, TcpClient<'a, 2, 1500, 1500>, DnsSocket<'a>>,
     rx_buf: &mut [u8],
     url: &str,
 ) {
@@ -255,7 +255,7 @@ async fn send_command<'a>(
 }
 
 async fn fetch_framebuffer<'a>(
-    client: &mut HttpClient<'a, TcpClient<'a, 1, 1500, 1500>, DnsSocket<'a>>,
+    client: &mut HttpClient<'a, TcpClient<'a, 2, 1500, 1500>, DnsSocket<'a>>,
     rx_buf: &mut [u8],
     fb: &mut [u8; FB_SIZE],
 ) -> Result<(), &'static str> {
