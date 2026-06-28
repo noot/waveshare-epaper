@@ -27,7 +27,7 @@ async fn main() -> eyre::Result<()> {
         std::env::var("NAVIDROME_PASS"),
     ) {
         info!(url = %url, user = %user, "navidrome backend enabled");
-        backends.push(Backend::navidrome(url, user, pass));
+        backends.push(Backend::navidrome(url, user, pass)?);
     }
 
     if let (Ok(client_id), Ok(client_secret), Ok(refresh_token)) = (
@@ -37,7 +37,7 @@ async fn main() -> eyre::Result<()> {
     ) && !client_id.is_empty()
     {
         info!("spotify backend enabled");
-        backends.push(Backend::spotify(client_id, client_secret, refresh_token));
+        backends.push(Backend::spotify(client_id, client_secret, refresh_token)?);
     }
 
     if backends.is_empty() {
@@ -69,8 +69,12 @@ async fn main() -> eyre::Result<()> {
 async fn framebuffer_handler(
     axum::extract::State(state): axum::extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    for backend in &state.backends {
-        match backend.now_playing().await {
+    // query all backends concurrently so a slow or unreachable one doesn't add
+    // its latency on top of the others. results preserve configured order.
+    let results = futures::future::join_all(state.backends.iter().map(|b| b.now_playing())).await;
+
+    for result in results {
+        match result {
             Ok(Some(np)) => {
                 info!(track = %np.track, artist = %np.artist, "serving now playing");
                 let fb = render::render_now_playing(&np);

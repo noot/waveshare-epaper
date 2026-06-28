@@ -262,8 +262,12 @@ where
         if !self.initialized {
             self.init_display()?;
         }
-        self.write_framebuffer_current()?;
+        // write to both current and previous ram so a following partial refresh
+        // has a correct base image to diff against
+        self.write_framebuffer_full()?;
 
+        // bypass red channel — also resets the mode if a prior partial set it normal
+        self.cmd_with(CMD_DISPLAY_UPDATE_CTRL, &[0x40, 0x00])?;
         self.cmd_with(CMD_DISPLAY_UPDATE_SEQ, &[0xf7])?;
         self.cmd(CMD_MASTER_ACTIVATE)?;
         self.wait_busy("refresh", 30000);

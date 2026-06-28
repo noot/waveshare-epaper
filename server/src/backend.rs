@@ -2,8 +2,22 @@ use eyre::WrapErr as _;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::debug;
+
+// cap how long we wait on a backend so a slow or unreachable one can't stall
+// every poll. connect is shorter than the overall request budget.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn build_client() -> eyre::Result<Client> {
+    Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .build()
+        .wrap_err("failed to build http client")
+}
 
 pub struct NowPlaying {
     pub track: String,
@@ -20,6 +34,7 @@ pub struct NavidromeConfig {
     user: String,
     pass: String,
     client: Client,
+    cover_cache: Mutex<Option<(String, Vec<u8>)>>,
 }
 
 pub struct SpotifyConfig {
@@ -28,6 +43,7 @@ pub struct SpotifyConfig {
     refresh_token: String,
     access_token: Arc<Mutex<Option<String>>>,
     client: Client,
+    cover_cache: Mutex<Option<(String, Vec<u8>)>>,
 }
 
 pub enum Backend {
@@ -36,23 +52,29 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub fn navidrome(url: String, user: String, pass: String) -> Self {
-        Self::Navidrome(NavidromeConfig {
+    pub fn navidrome(url: String, user: String, pass: String) -> eyre::Result<Self> {
+        Ok(Self::Navidrome(NavidromeConfig {
             url,
             user,
             pass,
-            client: Client::new(),
-        })
+            client: build_client()?,
+            cover_cache: Mutex::new(None),
+        }))
     }
 
-    pub fn spotify(client_id: String, client_secret: String, refresh_token: String) -> Self {
-        Self::Spotify(SpotifyConfig {
+    pub fn spotify(
+        client_id: String,
+        client_secret: String,
+        refresh_token: String,
+    ) -> eyre::Result<Self> {
+        Ok(Self::Spotify(SpotifyConfig {
             client_id,
             client_secret,
             refresh_token,
             access_token: Arc::new(Mutex::new(None)),
-            client: Client::new(),
-        })
+            client: build_client()?,
+            cover_cache: Mutex::new(None),
+        }))
     }
 
     pub async fn now_playing(&self) -> eyre::Result<Option<NowPlaying>> {
@@ -167,6 +189,12 @@ impl NavidromeConfig {
     }
 
     async fn fetch_cover_art(&self, id: &str) -> eyre::Result<Vec<u8>> {
+        if let Some((cached_id, bytes)) = self.cover_cache.lock().await.as_ref()
+            && cached_id == id
+        {
+            return Ok(bytes.clone());
+        }
+
         let mut params = self.subsonic_params();
         let size = "300".to_string();
         params.push(("id", id));
@@ -181,9 +209,11 @@ impl NavidromeConfig {
             .wrap_err("failed to fetch cover art")?
             .bytes()
             .await
-            .wrap_err("failed to read cover art bytes")?;
+            .wrap_err("failed to read cover art bytes")?
+            .to_vec();
 
-        Ok(bytes.to_vec())
+        *self.cover_cache.lock().await = Some((id.to_string(), bytes.clone()));
+        Ok(bytes)
     }
 }
 
@@ -392,6 +422,22 @@ impl SpotifyConfig {
         .await
     }
 
+    async fn fetch_cover_art(&self, url: &str) -> Option<Vec<u8>> {
+        if let Some((cached_url, bytes)) = self.cover_cache.lock().await.as_ref()
+            && cached_url == url
+        {
+            return Some(bytes.clone());
+        }
+
+        let bytes = match self.client.get(url).send().await {
+            Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
+            Err(_) => None,
+        }?;
+
+        *self.cover_cache.lock().await = Some((url.to_string(), bytes.clone()));
+        Some(bytes)
+    }
+
     async fn parse_response(
         &self,
         body: SpotifyCurrentlyPlaying,
@@ -403,10 +449,7 @@ impl SpotifyConfig {
         debug!(track = %item.name, playing = body.is_playing, "spotify: track");
 
         let cover_art = if let Some(img) = item.album.images.first() {
-            match self.client.get(&img.url).send().await {
-                Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
-                Err(_) => None,
-            }
+            self.fetch_cover_art(&img.url).await
         } else {
             None
         };
