@@ -2217,6 +2217,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "log",
+ "nb 1.1.0",
  "reqwless",
  "static_cell",
 ]

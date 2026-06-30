@@ -12,6 +12,7 @@ use embassy_net::{Runner, StackResources};
 use embassy_time::{Instant, Timer};
 use embedded_io_async::Read as _;
 use esp_alloc as _;
+use esp_hal::analog::adc::{Adc, AdcCalLine, AdcConfig, AdcPin, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
@@ -43,6 +44,15 @@ const SERVER_URL: &str = env!("SERVER_URL");
 
 const POLL_INTERVAL_SECS: u64 = 5;
 const FULL_REFRESH_EVERY: u32 = 60;
+
+// fallback center (mV) used only if an adc read errors
+const ADC_FALLBACK_CENTER: u16 = 1650;
+// minimum deflection (mV) from the resting center to register a direction
+const ADC_MARGIN: i32 = 500;
+// samples averaged at boot to find the joystick's resting position
+const CALIBRATION_SAMPLES: u32 = 16;
+// conversions averaged per axis read (after discarding the channel-switch read)
+const ADC_OVERSAMPLE: u32 = 4;
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -77,21 +87,42 @@ async fn main(spawner: Spawner) -> ! {
     .with_sck(peripherals.GPIO1)
     .with_mosi(peripherals.GPIO0);
 
-    // GPIO2=CS, GPIO5=DC, GPIO4=RST, GPIO10=BUSY
+    // GPIO2=CS, GPIO5=DC, GPIO7=RST, GPIO10=BUSY
     let cs = Output::new(peripherals.GPIO2, Level::High, OutputConfig::default());
     let dc = Output::new(peripherals.GPIO5, Level::Low, OutputConfig::default());
-    let rst = Output::new(peripherals.GPIO4, Level::High, OutputConfig::default());
+    let rst = Output::new(peripherals.GPIO7, Level::High, OutputConfig::default());
     let busy = Input::new(
         peripherals.GPIO10,
         InputConfig::default().with_pull(Pull::None),
     );
     let delay = Delay::new();
 
-    // GPIO6 = touch sensor (AT42QT1010, HIGH on touch)
-    let touch = Input::new(
+    // GPIO6 = joystick sw (push switch, active LOW with pull-up)
+    let joystick_sw = Input::new(
         peripherals.GPIO6,
-        InputConfig::default().with_pull(Pull::None),
+        InputConfig::default().with_pull(Pull::Up),
     );
+
+    // GPIO3 = joystick x, GPIO4 = joystick y (both ADC1)
+    // calibrated so read_oneshot returns millivolts
+    let mut adc_config = AdcConfig::new();
+    let mut x_pin =
+        adc_config.enable_pin_with_cal::<_, AdcCalLine<_>>(peripherals.GPIO3, Attenuation::_11dB);
+    let mut y_pin =
+        adc_config.enable_pin_with_cal::<_, AdcCalLine<_>>(peripherals.GPIO4, Attenuation::_11dB);
+    let mut adc = Adc::new(peripherals.ADC1, adc_config);
+
+    // sample the resting position so detection is relative to actual center,
+    // not a hardcoded midpoint (don't touch the stick during boot)
+    let mut sum_x: u32 = 0;
+    let mut sum_y: u32 = 0;
+    for _ in 0..CALIBRATION_SAMPLES {
+        sum_x += read_axis(&mut adc, &mut x_pin, ADC_FALLBACK_CENTER) as u32;
+        sum_y += read_axis(&mut adc, &mut y_pin, ADC_FALLBACK_CENTER) as u32;
+    }
+    let center_x = (sum_x / CALIBRATION_SAMPLES) as u16;
+    let center_y = (sum_y / CALIBRATION_SAMPLES) as u16;
+    println!("joystick: center x={}mV y={}mV", center_x, center_y);
 
     let fb_ptr: *mut [u8; FB_SIZE] = &raw mut FRAMEBUFFER;
     let fb: &'static mut [u8; FB_SIZE] = unsafe { &mut *fb_ptr };
@@ -155,6 +186,12 @@ async fn main(spawner: Spawner) -> ! {
     let base = server_base(SERVER_URL);
     let play_pause_url = format!("{}/play-pause", base);
     let next_url = format!("{}/next", base);
+    let prev_url = format!("{}/previous", base);
+    let vol_up_url = format!("{}/volume-up", base);
+    let vol_down_url = format!("{}/volume-down", base);
+
+    // edge trigger: only fires when the stick leaves center, re-arms on return
+    let mut joystick_armed = true;
 
     loop {
         let fb_mut = display.framebuffer_mut();
@@ -180,24 +217,49 @@ async fn main(spawner: Spawner) -> ! {
 
         cycle += 1;
 
-        // poll touch during wait period
+        // poll joystick during wait period
         let wait_end = Instant::now() + embassy_time::Duration::from_secs(POLL_INTERVAL_SECS);
         while Instant::now() < wait_end {
-            if let Some(gesture) = detect_gesture(&touch).await {
-                let url = match gesture {
-                    Gesture::SingleTap => {
-                        println!("touch: single tap → play/pause");
-                        &play_pause_url
-                    }
-                    Gesture::DoubleTap => {
-                        println!("touch: double tap → next");
-                        &next_url
-                    }
-                };
-                send_command(&mut client, &mut rx_buf, url).await;
+            if detect_press(&joystick_sw).await {
+                println!("joystick: press → play/pause");
+                send_command(&mut client, &mut rx_buf, &play_pause_url).await;
                 Timer::after(embassy_time::Duration::from_millis(500)).await;
                 break;
             }
+
+            let x = read_axis(&mut adc, &mut x_pin, center_x);
+            let y = read_axis(&mut adc, &mut y_pin, center_y);
+
+            match classify(x, y, center_x, center_y) {
+                Some(dir) if joystick_armed => {
+                    joystick_armed = false;
+                    let url = match dir {
+                        Direction::Left => {
+                            println!("joystick: left → previous");
+                            &prev_url
+                        }
+                        Direction::Right => {
+                            println!("joystick: right → next");
+                            &next_url
+                        }
+                        Direction::Up => {
+                            println!("joystick: up → volume up");
+                            &vol_up_url
+                        }
+                        Direction::Down => {
+                            println!("joystick: down → volume down");
+                            &vol_down_url
+                        }
+                    };
+                    send_command(&mut client, &mut rx_buf, url).await;
+                    break;
+                }
+                // still deflected after firing — wait for recenter to re-arm
+                Some(_) => {}
+                // back at center — ready for the next gesture
+                None => joystick_armed = true,
+            }
+
             Timer::after(embassy_time::Duration::from_millis(20)).await;
         }
     }
@@ -210,34 +272,65 @@ fn server_base(url: &str) -> &str {
     }
 }
 
-enum Gesture {
-    SingleTap,
-    DoubleTap,
+enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
-async fn detect_gesture(pin: &Input<'_>) -> Option<Gesture> {
-    if pin.is_low() {
-        return None;
+// the first conversion after switching adc channels is unreliable on the c3,
+// so discard it, then average a few clean samples
+fn read_axis<'a, PIN, CS>(
+    adc: &mut Adc<'a, esp_hal::peripherals::ADC1<'a>, esp_hal::Blocking>,
+    pin: &mut AdcPin<PIN, esp_hal::peripherals::ADC1<'a>, CS>,
+    fallback: u16,
+) -> u16
+where
+    PIN: esp_hal::analog::adc::AdcChannel,
+    CS: esp_hal::analog::adc::AdcCalScheme<esp_hal::peripherals::ADC1<'a>>,
+{
+    let _ = nb::block!(adc.read_oneshot(pin));
+    let mut sum: u32 = 0;
+    for _ in 0..ADC_OVERSAMPLE {
+        sum += nb::block!(adc.read_oneshot(pin)).unwrap_or(fallback) as u32;
     }
+    (sum / ADC_OVERSAMPLE) as u16
+}
 
-    // touched — wait for release
-    while pin.is_high() {
-        Timer::after(embassy_time::Duration::from_millis(20)).await;
-    }
+// maps raw x/y readings to a direction relative to the resting center;
+// orientation depends on wiring, flip the axes here if a push goes the wrong way
+fn classify(x: u16, y: u16, center_x: u16, center_y: u16) -> Option<Direction> {
+    let dx = x as i32 - center_x as i32;
+    let dy = y as i32 - center_y as i32;
 
-    // 300ms window for a second tap
-    let deadline = Instant::now() + embassy_time::Duration::from_millis(300);
-    while Instant::now() < deadline {
-        if pin.is_high() {
-            while pin.is_high() {
-                Timer::after(embassy_time::Duration::from_millis(20)).await;
-            }
-            return Some(Gesture::DoubleTap);
+    if dx.abs() < ADC_MARGIN && dy.abs() < ADC_MARGIN {
+        None
+    } else if dx.abs() >= dy.abs() {
+        if dx < 0 {
+            Some(Direction::Left)
+        } else {
+            Some(Direction::Right)
         }
+    } else if dy < 0 {
+        Some(Direction::Up)
+    } else {
+        Some(Direction::Down)
+    }
+}
+
+async fn detect_press(pin: &Input<'_>) -> bool {
+    // joystick sw is active low; idle reads high via pull-up
+    if pin.is_high() {
+        return false;
+    }
+
+    // pressed — wait for release (debounce on release)
+    while pin.is_low() {
         Timer::after(embassy_time::Duration::from_millis(20)).await;
     }
 
-    Some(Gesture::SingleTap)
+    true
 }
 
 async fn send_command<'a>(

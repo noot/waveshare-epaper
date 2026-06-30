@@ -26,9 +26,10 @@ reqwless     = { version = "0.14.0", default-features = false, optional = true }
 static_cell  = { version = "2.1.0", optional = true }
 log              = { version = "0.4", optional = true }
 embedded-io-async = { version = "0.7", optional = true }
+nb               = { version = "1.1.0", optional = true }
 
 [features]
-wifi = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-alloc", "dep:embassy-executor", "dep:embassy-net", "dep:embassy-time", "dep:reqwless", "dep:static_cell", "dep:log", "dep:embedded-io-async"]
+wifi = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-alloc", "dep:embassy-executor", "dep:embassy-net", "dep:embassy-time", "dep:reqwless", "dep:static_cell", "dep:log", "dep:embedded-io-async", "dep:nb"]
 
 [[example]]
 name = "fetch"

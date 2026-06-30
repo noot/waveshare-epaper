@@ -49,6 +49,9 @@ async fn main() -> eyre::Result<()> {
         .route("/framebuffer", get(framebuffer_handler))
         .route("/play-pause", post(play_pause_handler))
         .route("/next", post(next_handler))
+        .route("/previous", post(previous_handler))
+        .route("/volume-up", post(volume_up_handler))
+        .route("/volume-down", post(volume_down_handler))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
@@ -110,6 +113,39 @@ async fn next_handler(
     for backend in &state.backends {
         if let Err(e) = backend.next_track().await {
             tracing::warn!(error = %e, "next_track failed");
+        }
+    }
+    "ok"
+}
+
+async fn previous_handler(
+    axum::extract::State(state): axum::extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    for backend in &state.backends {
+        if let Err(e) = backend.previous_track().await {
+            tracing::warn!(error = %e, "previous_track failed");
+        }
+    }
+    "ok"
+}
+
+async fn volume_up_handler(
+    axum::extract::State(state): axum::extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    for backend in &state.backends {
+        if let Err(e) = backend.volume_up().await {
+            tracing::warn!(error = %e, "volume_up failed");
+        }
+    }
+    "ok"
+}
+
+async fn volume_down_handler(
+    axum::extract::State(state): axum::extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    for backend in &state.backends {
+        if let Err(e) = backend.volume_down().await {
+            tracing::warn!(error = %e, "volume_down failed");
         }
     }
     "ok"

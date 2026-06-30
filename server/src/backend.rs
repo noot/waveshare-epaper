@@ -97,7 +97,31 @@ impl Backend {
             Self::Spotify(cfg) => cfg.next_track().await,
         }
     }
+
+    pub async fn previous_track(&self) -> eyre::Result<()> {
+        match self {
+            Self::Navidrome(_) => Ok(()),
+            Self::Spotify(cfg) => cfg.previous_track().await,
+        }
+    }
+
+    pub async fn volume_up(&self) -> eyre::Result<()> {
+        match self {
+            Self::Navidrome(_) => Ok(()),
+            Self::Spotify(cfg) => cfg.change_volume(VOLUME_STEP).await,
+        }
+    }
+
+    pub async fn volume_down(&self) -> eyre::Result<()> {
+        match self {
+            Self::Navidrome(_) => Ok(()),
+            Self::Spotify(cfg) => cfg.change_volume(-VOLUME_STEP).await,
+        }
+    }
 }
+
+// percent the volume moves per joystick nudge
+const VOLUME_STEP: i32 = 10;
 
 // --- navidrome (subsonic API) ---
 
@@ -436,6 +460,47 @@ impl SpotifyConfig {
 
         *self.cover_cache.lock().await = Some((url.to_string(), bytes.clone()));
         Some(bytes)
+    }
+    
+    async fn previous_track(&self) -> eyre::Result<()> {
+        self.spotify_request(
+            reqwest::Method::POST,
+            "https://api.spotify.com/v1/me/player/previous",
+        )
+        .await
+    }
+
+    async fn change_volume(&self, delta: i32) -> eyre::Result<()> {
+        let token = self.get_token().await?;
+        let resp = self
+            .client
+            .get("https://api.spotify.com/v1/me/player")
+            .bearer_auth(&token)
+            .send()
+            .await
+            .wrap_err("failed to get playback state")?;
+
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .wrap_err("failed to parse playback state")?;
+
+        let current = body
+            .get("device")
+            .and_then(|d| d.get("volume_percent"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(50) as i32;
+
+        let target = (current + delta).clamp(0, 100);
+        let url = format!(
+            "https://api.spotify.com/v1/me/player/volume?volume_percent={}",
+            target
+        );
+        self.spotify_request(reqwest::Method::PUT, &url).await
     }
 
     async fn parse_response(
